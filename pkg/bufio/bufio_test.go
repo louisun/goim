@@ -43,7 +43,7 @@ func (r13 *rot13Reader) Read(p []byte) (int, error) {
 }
 
 // Call ReadByte to accumulate the text of a file
-func readBytes(buf *Reader) string {
+func readBytes(buf *BufferedReader) string {
 	var b [1000]byte
 	nb := 0
 	for {
@@ -87,8 +87,8 @@ var readMakers = []readMaker{
 	{"timeout", iotest.TimeoutReader},
 }
 
-// Call Read to accumulate the text of a file
-func reads(buf *Reader, m int) string {
+// Call GetReadMsg to accumulate the text of a file
+func reads(buf *BufferedReader, m int) string {
 	var b [1000]byte
 	nb := 0
 	for {
@@ -103,16 +103,16 @@ func reads(buf *Reader, m int) string {
 
 type bufReader struct {
 	name string
-	fn   func(*Reader) string
+	fn   func(*BufferedReader) string
 }
 
 var bufreaders = []bufReader{
-	{"1", func(b *Reader) string { return reads(b, 1) }},
-	{"2", func(b *Reader) string { return reads(b, 2) }},
-	{"3", func(b *Reader) string { return reads(b, 3) }},
-	{"4", func(b *Reader) string { return reads(b, 4) }},
-	{"5", func(b *Reader) string { return reads(b, 5) }},
-	{"7", func(b *Reader) string { return reads(b, 7) }},
+	{"1", func(b *BufferedReader) string { return reads(b, 1) }},
+	{"2", func(b *BufferedReader) string { return reads(b, 2) }},
+	{"3", func(b *BufferedReader) string { return reads(b, 3) }},
+	{"4", func(b *BufferedReader) string { return reads(b, 4) }},
+	{"5", func(b *BufferedReader) string { return reads(b, 5) }},
+	{"7", func(b *BufferedReader) string { return reads(b, 7) }},
 	{"bytes", readBytes},
 }
 
@@ -270,7 +270,7 @@ func TestNewReaderSizeIdempotent(t *testing.T) {
 	// Does it recognize itself?
 	b1 := NewReaderSize(b, BufSize)
 	if b1 != b {
-		t.Error("NewReaderSize did not detect underlying Reader")
+		t.Error("NewReaderSize did not detect underlying BufferedReader")
 	}
 	// Does it wrap if existing buffer is too small?
 	b2 := NewReaderSize(b, 2*BufSize)
@@ -285,7 +285,7 @@ func TestNewWriterSizeIdempotent(t *testing.T) {
 	// Does it recognize itself?
 	b1 := NewWriterSize(b, BufSize)
 	if b1 != b {
-		t.Error("NewWriterSize did not detect underlying Writer")
+		t.Error("NewWriterSize did not detect underlying BufferedWriter")
 	}
 	// Does it wrap if existing buffer is too small?
 	b2 := NewWriterSize(b, 2*BufSize)
@@ -317,11 +317,11 @@ func TestBufferFull(t *testing.T) {
 	buf := NewReaderSize(strings.NewReader(longString), minReadBufferSize)
 	line, err := buf.ReadSlice('!')
 	if string(line) != "And now, hello, " || err != ErrBufferFull {
-		t.Errorf("first ReadSlice(,) = %q, %v", line, err)
+		t.Errorf("first ReadDelim(,) = %q, %v", line, err)
 	}
 	line, err = buf.ReadSlice('!')
 	if string(line) != "world!" || err != nil {
-		t.Errorf("second ReadSlice(,) = %q, %v", line, err)
+		t.Errorf("second ReadDelim(,) = %q, %v", line, err)
 	}
 }
 
@@ -375,10 +375,10 @@ func TestPeek(t *testing.T) {
 		t.Errorf(`Peek(4) on "abcd", EOF = %q, %v; want "abcd", nil`, string(s), err)
 	}
 	if n, err := buf.Read(p[0:5]); string(p[0:n]) != "abcd" || err != nil {
-		t.Fatalf("Read after peek = %q, %v; want abcd, EOF", p[0:n], err)
+		t.Fatalf("GetReadMsg after peek = %q, %v; want abcd, EOF", p[0:n], err)
 	}
 	if n, err := buf.Read(p[0:1]); string(p[0:n]) != "" || err != io.EOF {
-		t.Fatalf(`second Read after peek = %q, %v; want "", EOF`, p[0:n], err)
+		t.Fatalf(`second GetReadMsg after peek = %q, %v; want "", EOF`, p[0:n], err)
 	}
 }
 
@@ -490,10 +490,10 @@ func TestReadAfterLines(t *testing.T) {
 	}
 	n, err := io.Copy(outbuf, l)
 	if int(n) != len(restData) || err != nil {
-		t.Errorf("bad result for Read: n=%d err=%v", n, err)
+		t.Errorf("bad result for GetReadMsg: n=%d err=%v", n, err)
 	}
 	if outbuf.String() != restData {
-		t.Errorf("bad result for Read: got %q; expected %q", outbuf.String(), restData)
+		t.Errorf("bad result for GetReadMsg: got %q; expected %q", outbuf.String(), restData)
 	}
 }
 
@@ -581,7 +581,7 @@ func testReadLineNewlines(t *testing.T, input string, expect []readLineResult) {
 }
 
 // TestWriterReadFromCounts tests that using io.Copy to copy into a
-// bufio.Writer does not prematurely flush the buffer. For example, when
+// bufio.BufferedWriter does not prematurely flush the buffer. For example, when
 // buffering writes to a network socket, excessive network writes should be
 // avoided.
 func TestWriterReadFromCounts(t *testing.T) {
@@ -651,7 +651,7 @@ func TestNegativeRead(t *testing.T) {
 		case nil:
 			t.Fatal("read did not panic")
 		case error:
-			if !strings.Contains(err.Error(), "reader returned negative count from Read") {
+			if !strings.Contains(err.Error(), "reader returned negative count from GetReadMsg") {
 				t.Fatalf("wrong panic: %v", err)
 			}
 		default:
@@ -682,16 +682,16 @@ func TestReaderClearError(t *testing.T) {
 	b := NewReader(r)
 	buf := make([]byte, 1)
 	if _, err := b.Read(nil); err != nil {
-		t.Fatalf("1st nil Read = %v; want nil", err)
+		t.Fatalf("1st nil GetReadMsg = %v; want nil", err)
 	}
 	if _, err := b.Read(buf); err != errFake {
-		t.Fatalf("1st Read = %v; want errFake", err)
+		t.Fatalf("1st GetReadMsg = %v; want errFake", err)
 	}
 	if _, err := b.Read(nil); err != nil {
-		t.Fatalf("2nd nil Read = %v; want nil", err)
+		t.Fatalf("2nd nil GetReadMsg = %v; want nil", err)
 	}
 	if _, err := b.Read(buf); err != nil {
-		t.Fatalf("3rd Read with buffer = %v; want nil", err)
+		t.Fatalf("3rd GetReadMsg with buffer = %v; want nil", err)
 	}
 	if r.nread != 2 {
 		t.Errorf("num reads = %d; want 2", r.nread)
@@ -819,7 +819,7 @@ func TestReaderDiscard(t *testing.T) {
 		// Discard of 0 shouldn't cause a read:
 		{
 			name:         "discard zero",
-			r:            newScriptedReader(), // will panic on Read
+			r:            newScriptedReader(), // will panic on GetReadMsg
 			n:            0,
 			want:         0,
 			wantErr:      nil,
@@ -827,7 +827,7 @@ func TestReaderDiscard(t *testing.T) {
 		},
 		{
 			name:         "discard negative",
-			r:            newScriptedReader(), // will panic on Read
+			r:            newScriptedReader(), // will panic on GetReadMsg
 			n:            -1,
 			want:         0,
 			wantErr:      ErrNegativeCount,
@@ -859,22 +859,22 @@ func TestReaderDiscard(t *testing.T) {
 
 }
 
-// An onlyReader only implements io.Reader, no matter what other methods the underlying implementation may have.
+// An onlyReader only implements io.BufferedReader, no matter what other methods the underlying implementation may have.
 type onlyReader struct {
 	io.Reader
 }
 
-// An onlyWriter only implements io.Writer, no matter what other methods the underlying implementation may have.
+// An onlyWriter only implements io.BufferedWriter, no matter what other methods the underlying implementation may have.
 type onlyWriter struct {
 	io.Writer
 }
 
-// A scriptedReader is an io.Reader that executes its steps sequentially.
+// A scriptedReader is an io.BufferedReader that executes its steps sequentially.
 type scriptedReader []func(p []byte) (n int, err error)
 
 func (sr *scriptedReader) Read(p []byte) (n int, err error) {
 	if len(*sr) == 0 {
-		panic("too many Read calls on scripted Reader. No steps remain.")
+		panic("too many GetReadMsg calls on scripted BufferedReader. No steps remain.")
 	}
 	step := (*sr)[0]
 	*sr = (*sr)[1:]

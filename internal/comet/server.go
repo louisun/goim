@@ -30,6 +30,7 @@ const (
 func newLogicClient(c *conf.RPCClient) logic.LogicClient {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.Dial))
 	defer cancel()
+	// 调用 logic 服务
 	conn, err := grpc.DialContext(ctx, "discovery://default/goim.logic",
 		[]grpc.DialOption{
 			grpc.WithInsecure(),
@@ -53,28 +54,40 @@ func newLogicClient(c *conf.RPCClient) logic.LogicClient {
 
 // Server is comet server.
 type Server struct {
-	c         *conf.Config
-	round     *Round    // accept round store
-	buckets   []*Bucket // subkey bucket
-	bucketIdx uint32
+	// 配置信息
+	config *conf.Config
 
-	serverID  string
+	// Round Robin 策略获取的的共享资源
+	round *Round
+
+	// 分成 bucketSize 个 Bucket 桶来管理连接
+	buckets    []*Bucket
+	bucketSize uint32
+
+	// 当前服务器 ID 标识
+	serverID string
+
+	// rpc 客户端
 	rpcClient logic.LogicClient
 }
 
 // NewServer returns a new Server.
 func NewServer(c *conf.Config) *Server {
 	s := &Server{
-		c:         c,
+		config:    c,
 		round:     NewRound(c),
 		rpcClient: newLogicClient(c.RPCClient),
 	}
-	// init bucket
+
+	// init bucket, 每个 bucket 都负责一个 map channel, rooms
 	s.buckets = make([]*Bucket, c.Bucket.Size)
-	s.bucketIdx = uint32(c.Bucket.Size)
+	s.bucketSize = uint32(c.Bucket.Size)
+
 	for i := 0; i < c.Bucket.Size; i++ {
+		// 创建 Bucket
 		s.buckets[i] = NewBucket(c.Bucket)
 	}
+
 	s.serverID = c.Env.Host
 	go s.onlineproc()
 	return s
@@ -87,7 +100,7 @@ func (s *Server) Buckets() []*Bucket {
 
 // Bucket get the bucket by subkey.
 func (s *Server) Bucket(subKey string) *Bucket {
-	idx := cityhash.CityHash32([]byte(subKey), uint32(len(subKey))) % s.bucketIdx
+	idx := cityhash.CityHash32([]byte(subKey), uint32(len(subKey))) % s.bucketSize
 	if conf.Conf.Debug {
 		log.Infof("%s hit channel bucket index: %d use cityhash", subKey, idx)
 	}
@@ -106,23 +119,30 @@ func (s *Server) Close() (err error) {
 
 func (s *Server) onlineproc() {
 	for {
+		// 每 10s 执行
 		var (
 			allRoomsCount map[string]int32
 			err           error
 		)
 		roomCount := make(map[string]int32)
+		// 遍历 bucket 获取当前的 roomID 的在线人数
 		for _, bucket := range s.buckets {
 			for roomID, count := range bucket.RoomsCount() {
 				roomCount[roomID] += count
 			}
 		}
+
+		// 调用 logic rpc client 的 RenewOnline rpc  接口
 		if allRoomsCount, err = s.RenewOnline(context.Background(), s.serverID, roomCount); err != nil {
 			time.Sleep(time.Second)
 			continue
 		}
+
+		// 更新每个 bucket AllOnline 的数量
 		for _, bucket := range s.buckets {
 			bucket.UpRoomsCount(allRoomsCount)
 		}
+
 		time.Sleep(time.Second * 10)
 	}
 }

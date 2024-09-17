@@ -6,7 +6,7 @@ type Writer struct {
 	buf []byte
 }
 
-// NewWriterSize new a writer with size.
+// NewWriterSize new a writer with eachBufferSize.
 func NewWriterSize(n int) *Writer {
 	return &Writer{buf: make([]byte, n)}
 }

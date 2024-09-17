@@ -79,7 +79,7 @@ func (l *Logic) RenewOnline(c context.Context, server string, roomCount map[stri
 }
 
 // Receive receive a message.
-func (l *Logic) Receive(c context.Context, mid int64, proto *grpc.Proto) (err error) {
+func (l *Logic) Receive(c context.Context, mid int64, proto *grpc.ProtoMsg) (err error) {
 	log.Infof("receive mid:%d message:%+v", mid, proto)
 	return
 }

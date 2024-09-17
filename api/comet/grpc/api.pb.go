@@ -27,7 +27,7 @@ const _ = proto.ProtoPackageIsVersion2 // please upgrade the proto package
 //
 // v1.0.0
 // protocol
-type Proto struct {
+type ProtoMsg struct {
 	Ver                  int32    `protobuf:"varint,1,opt,name=ver,proto3" json:"ver"`
 	Op                   int32    `protobuf:"varint,2,opt,name=op,proto3" json:"op"`
 	Seq                  int32    `protobuf:"varint,3,opt,name=seq,proto3" json:"seq"`
@@ -37,16 +37,16 @@ type Proto struct {
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *Proto) Reset()         { *m = Proto{} }
-func (m *Proto) String() string { return proto.CompactTextString(m) }
-func (*Proto) ProtoMessage()    {}
-func (*Proto) Descriptor() ([]byte, []int) {
+func (m *ProtoMsg) Reset()         { *m = ProtoMsg{} }
+func (m *ProtoMsg) String() string { return proto.CompactTextString(m) }
+func (*ProtoMsg) ProtoMessage()    {}
+func (*ProtoMsg) Descriptor() ([]byte, []int) {
 	return fileDescriptor_api_232ce0885903222f, []int{0}
 }
-func (m *Proto) XXX_Unmarshal(b []byte) error {
+func (m *ProtoMsg) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *Proto) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *ProtoMsg) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
 		return xxx_messageInfo_Proto.Marshal(b, m, deterministic)
 	} else {
@@ -58,40 +58,40 @@ func (m *Proto) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return b[:n], nil
 	}
 }
-func (dst *Proto) XXX_Merge(src proto.Message) {
+func (dst *ProtoMsg) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_Proto.Merge(dst, src)
 }
-func (m *Proto) XXX_Size() int {
+func (m *ProtoMsg) XXX_Size() int {
 	return m.Size()
 }
-func (m *Proto) XXX_DiscardUnknown() {
+func (m *ProtoMsg) XXX_DiscardUnknown() {
 	xxx_messageInfo_Proto.DiscardUnknown(m)
 }
 
 var xxx_messageInfo_Proto proto.InternalMessageInfo
 
-func (m *Proto) GetVer() int32 {
+func (m *ProtoMsg) GetVer() int32 {
 	if m != nil {
 		return m.Ver
 	}
 	return 0
 }
 
-func (m *Proto) GetOp() int32 {
+func (m *ProtoMsg) GetOp() int32 {
 	if m != nil {
 		return m.Op
 	}
 	return 0
 }
 
-func (m *Proto) GetSeq() int32 {
+func (m *ProtoMsg) GetSeq() int32 {
 	if m != nil {
 		return m.Seq
 	}
 	return 0
 }
 
-func (m *Proto) GetBody() []byte {
+func (m *ProtoMsg) GetBody() []byte {
 	if m != nil {
 		return m.Body
 	}
@@ -139,9 +139,9 @@ var xxx_messageInfo_Empty proto.InternalMessageInfo
 
 type PushMsgReq struct {
 	Keys                 []string `protobuf:"bytes,1,rep,name=keys" json:"keys,omitempty"`
-	ProtoOp              int32    `protobuf:"varint,3,opt,name=protoOp,proto3" json:"protoOp,omitempty"`
-	Proto                *Proto   `protobuf:"bytes,2,opt,name=proto" json:"proto,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	ProtoOp              int32     `protobuf:"varint,3,opt,name=protoOp,proto3" json:"protoOp,omitempty"`
+	Proto                *ProtoMsg `protobuf:"bytes,2,opt,name=proto" json:"proto,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}  `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
@@ -193,7 +193,7 @@ func (m *PushMsgReq) GetProtoOp() int32 {
 	return 0
 }
 
-func (m *PushMsgReq) GetProto() *Proto {
+func (m *PushMsgReq) GetProto() *ProtoMsg {
 	if m != nil {
 		return m.Proto
 	}
@@ -240,9 +240,9 @@ func (m *PushMsgReply) XXX_DiscardUnknown() {
 var xxx_messageInfo_PushMsgReply proto.InternalMessageInfo
 
 type BroadcastReq struct {
-	ProtoOp              int32    `protobuf:"varint,1,opt,name=protoOp,proto3" json:"protoOp,omitempty"`
-	Proto                *Proto   `protobuf:"bytes,2,opt,name=proto" json:"proto,omitempty"`
-	Speed                int32    `protobuf:"varint,3,opt,name=speed,proto3" json:"speed,omitempty"`
+	ProtoOp              int32     `protobuf:"varint,1,opt,name=protoOp,proto3" json:"protoOp,omitempty"`
+	Proto                *ProtoMsg `protobuf:"bytes,2,opt,name=proto" json:"proto,omitempty"`
+	Speed                int32     `protobuf:"varint,3,opt,name=speed,proto3" json:"speed,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -288,7 +288,7 @@ func (m *BroadcastReq) GetProtoOp() int32 {
 	return 0
 }
 
-func (m *BroadcastReq) GetProto() *Proto {
+func (m *BroadcastReq) GetProto() *ProtoMsg {
 	if m != nil {
 		return m.Proto
 	}
@@ -342,9 +342,9 @@ func (m *BroadcastReply) XXX_DiscardUnknown() {
 var xxx_messageInfo_BroadcastReply proto.InternalMessageInfo
 
 type BroadcastRoomReq struct {
-	RoomID               string   `protobuf:"bytes,1,opt,name=roomID,proto3" json:"roomID,omitempty"`
-	Proto                *Proto   `protobuf:"bytes,2,opt,name=proto" json:"proto,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	RoomID               string    `protobuf:"bytes,1,opt,name=roomID,proto3" json:"roomID,omitempty"`
+	Proto                *ProtoMsg `protobuf:"bytes,2,opt,name=proto" json:"proto,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}  `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
@@ -389,7 +389,7 @@ func (m *BroadcastRoomReq) GetRoomID() string {
 	return ""
 }
 
-func (m *BroadcastRoomReq) GetProto() *Proto {
+func (m *BroadcastRoomReq) GetProto() *ProtoMsg {
 	if m != nil {
 		return m.Proto
 	}
@@ -521,7 +521,7 @@ func (m *RoomsReply) GetRooms() map[string]bool {
 }
 
 func init() {
-	proto.RegisterType((*Proto)(nil), "goim.comet.Proto")
+	proto.RegisterType((*ProtoMsg)(nil), "goim.comet.ProtoMsg")
 	proto.RegisterType((*Empty)(nil), "goim.comet.Empty")
 	proto.RegisterType((*PushMsgReq)(nil), "goim.comet.PushMsgReq")
 	proto.RegisterType((*PushMsgReply)(nil), "goim.comet.PushMsgReply")
@@ -578,7 +578,7 @@ func (c *cometClient) Ping(ctx context.Context, in *Empty, opts ...grpc.CallOpti
 
 func (c *cometClient) Close(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
 	out := new(Empty)
-	err := c.cc.Invoke(ctx, "/goim.comet.Comet/Close", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/goim.comet.Comet/SendFinishSignal", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -670,7 +670,7 @@ func _Comet_Close_Handler(srv interface{}, ctx context.Context, dec func(interfa
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/goim.comet.Comet/Close",
+		FullMethod: "/goim.comet.Comet/SendFinishSignal",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CometServer).Close(ctx, req.(*Empty))
@@ -759,7 +759,7 @@ var _Comet_serviceDesc = grpc.ServiceDesc{
 			Handler:    _Comet_Ping_Handler,
 		},
 		{
-			MethodName: "Close",
+			MethodName: "SendFinishSignal",
 			Handler:    _Comet_Close_Handler,
 		},
 		{
@@ -783,7 +783,7 @@ var _Comet_serviceDesc = grpc.ServiceDesc{
 	Metadata: "api.proto",
 }
 
-func (m *Proto) Marshal() (dAtA []byte, err error) {
+func (m *ProtoMsg) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalTo(dAtA)
@@ -793,7 +793,7 @@ func (m *Proto) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *Proto) MarshalTo(dAtA []byte) (int, error) {
+func (m *ProtoMsg) MarshalTo(dAtA []byte) (int, error) {
 	var i int
 	_ = i
 	var l int
@@ -1110,7 +1110,7 @@ func encodeVarintApi(dAtA []byte, offset int, v uint64) int {
 	dAtA[offset] = uint8(v)
 	return offset + 1
 }
-func (m *Proto) Size() (n int) {
+func (m *ProtoMsg) Size() (n int) {
 	var l int
 	_ = l
 	if m.Ver != 0 {
@@ -1265,7 +1265,7 @@ func sovApi(x uint64) (n int) {
 func sozApi(x uint64) (n int) {
 	return sovApi(uint64((x << 1) ^ uint64((int64(x) >> 63))))
 }
-func (m *Proto) Unmarshal(dAtA []byte) error {
+func (m *ProtoMsg) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -1288,10 +1288,10 @@ func (m *Proto) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: Proto: wiretype end group for non-group")
+			return fmt.Errorf("proto: ProtoMsg: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: Proto: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: ProtoMsg: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
@@ -1515,7 +1515,7 @@ func (m *PushMsgReq) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 2:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Proto", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field ProtoMsg", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -1540,7 +1540,7 @@ func (m *PushMsgReq) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.Proto == nil {
-				m.Proto = &Proto{}
+				m.Proto = &ProtoMsg{}
 			}
 			if err := m.Proto.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
@@ -1688,7 +1688,7 @@ func (m *BroadcastReq) Unmarshal(dAtA []byte) error {
 			}
 		case 2:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Proto", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field ProtoMsg", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -1713,7 +1713,7 @@ func (m *BroadcastReq) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.Proto == nil {
-				m.Proto = &Proto{}
+				m.Proto = &ProtoMsg{}
 			}
 			if err := m.Proto.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
@@ -1871,7 +1871,7 @@ func (m *BroadcastRoomReq) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 2:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Proto", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field ProtoMsg", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -1896,7 +1896,7 @@ func (m *BroadcastRoomReq) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.Proto == nil {
-				m.Proto = &Proto{}
+				m.Proto = &ProtoMsg{}
 			}
 			if err := m.Proto.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err

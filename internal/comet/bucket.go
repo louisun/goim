@@ -8,240 +8,253 @@ import (
 	"github.com/Terry-Mao/goim/internal/comet/conf"
 )
 
-// Bucket is a channel holder.
+// Bucket 是一个管理 Channel 和 Room 的容器
 type Bucket struct {
-	c     *conf.Bucket
-	cLock sync.RWMutex        // protect the channels for chs
-	chs   map[string]*Channel // map sub key to a channel
-	// room
-	rooms       map[string]*Room // bucket room channels
-	routines    []chan *grpc.BroadcastRoomReq
-	routinesNum uint64
+	// Bucket 配置
+	config *conf.Bucket
 
-	ipCnts map[string]int32
+	// Channel Map，key 为连接的 Key，值为对应的 Channel，管理当前 bucket 下所有的 Channel
+	mu         sync.RWMutex
+	channelMap map[string]*Channel
+
+	// 管理当前 bucket 下所有的 Room
+	// Room Map，key 为 RoomID，值为对应的 Room
+	// Room 维护了房间内的 Channel -> Channel -> ... 链表，以及人数等统计信息
+	roomMap map[string]*Room
+	// 房间消息请求队列，默认 32 个协程，每个 channel 1024 个大小
+	routines []chan *grpc.BroadcastRoomReq
+	// 推送房间消息的协程数量
+	routineCount uint64
+
+	// 每个 IP 地址的活跃连接计数，防止单个 IP 建立过多连接
+	ipConnectionCount map[string]int32
 }
 
-// NewBucket new a bucket struct. store the key with im channel.
-func NewBucket(c *conf.Bucket) (b *Bucket) {
-	b = new(Bucket)
-	b.chs = make(map[string]*Channel, c.Channel)
-	b.ipCnts = make(map[string]int32)
-	b.c = c
-	b.rooms = make(map[string]*Room, c.Room)
-	b.routines = make([]chan *grpc.BroadcastRoomReq, c.RoutineAmount)
-	for i := uint64(0); i < c.RoutineAmount; i++ {
-		c := make(chan *grpc.BroadcastRoomReq, c.RoutineSize)
-		b.routines[i] = c
-		go b.roomproc(c)
+// NewBucket 新建一个 Bucket 实例，初始化相关数据结构
+func NewBucket(config *conf.Bucket) *Bucket {
+	b := &Bucket{
+		config: config,
+		// 默认 1024 个 Channel map 大小
+		channelMap:        make(map[string]*Channel, config.Channel),
+		ipConnectionCount: make(map[string]int32),
+		// 默认 1024 个大小
+		roomMap: make(map[string]*Room, config.Room),
+		// 默认 32 个协程
+		routines: make([]chan *grpc.BroadcastRoomReq, config.RoutineAmount),
 	}
-	return
+
+	// 初始化房间消息处理的协程
+	for i := uint64(0); i < config.RoutineAmount; i++ {
+		// 每个 channel 1024 容量
+		roomChan := make(chan *grpc.BroadcastRoomReq, config.RoutineSize)
+		b.routines[i] = roomChan
+		// 32 个协程
+		go b.roomChanProcessor(roomChan)
+	}
+
+	return b
 }
 
-// ChannelCount channel count in the bucket
+// ChannelCount 返回当前 Bucket 中的 Channel 数量
 func (b *Bucket) ChannelCount() int {
-	return len(b.chs)
+	return len(b.channelMap)
 }
 
-// RoomCount room count in the bucket
+// RoomCount 返回当前 Bucket 中的 Room 数量
 func (b *Bucket) RoomCount() int {
-	return len(b.rooms)
+	return len(b.roomMap)
 }
 
-// RoomsCount get all room id where online number > 0.
-func (b *Bucket) RoomsCount() (res map[string]int32) {
-	var (
-		roomID string
-		room   *Room
-	)
-	b.cLock.RLock()
-	res = make(map[string]int32)
-	for roomID, room = range b.rooms {
+// RoomsCount 返回所有在线人数大于 0 的房间及其在线人数
+func (b *Bucket) RoomsCount() map[string]int32 {
+	result := make(map[string]int32)
+	b.mu.RLock()
+	for roomID, room := range b.roomMap {
 		if room.Online > 0 {
-			res[roomID] = room.Online
+			result[roomID] = room.Online
 		}
 	}
-	b.cLock.RUnlock()
-	return
+	b.mu.RUnlock()
+	return result
 }
 
-// ChangeRoom change ro room
-func (b *Bucket) ChangeRoom(nrid string, ch *Channel) (err error) {
-	var (
-		nroom *Room
-		ok    bool
-		oroom = ch.Room
-	)
-	// change to no room
-	if nrid == "" {
-		if oroom != nil && oroom.Del(ch) {
-			b.DelRoom(oroom)
+// ChangeRoom 切换 Channel 所在的 Room
+func (b *Bucket) ChangeRoom(newRoomID string, channel *Channel) error {
+	oldRoom := channel.Room
+
+	// 如果新房间 ID 为空，表示移除房间
+	if newRoomID == "" {
+		if oldRoom != nil && oldRoom.RemoveChannel(channel) {
+			b.deleteRoom(oldRoom) // 删除旧房间
 		}
-		ch.Room = nil
-		return
+		channel.Room = nil
+		return nil
 	}
-	b.cLock.Lock()
-	if nroom, ok = b.rooms[nrid]; !ok {
-		nroom = NewRoom(nrid)
-		b.rooms[nrid] = nroom
+
+	// 获取或创建新房间
+	b.mu.Lock()
+	newRoom, exists := b.roomMap[newRoomID]
+	if !exists {
+		newRoom = NewRoom(newRoomID)
+		b.roomMap[newRoomID] = newRoom
 	}
-	b.cLock.Unlock()
-	if err = nroom.Put(ch); err != nil {
-		return
+	b.mu.Unlock()
+
+	// 将 Channel 加入新房间
+	if err := newRoom.AddChannel(channel); err != nil {
+		return err
 	}
-	ch.Room = nroom
-	if oroom != nil && oroom.Del(ch) {
-		b.DelRoom(oroom)
+	channel.Room = newRoom
+
+	// 从旧房间移除
+	if oldRoom != nil && oldRoom.RemoveChannel(channel) {
+		b.deleteRoom(oldRoom)
 	}
-	return
+
+	return nil
 }
 
-// Put put a channel according with sub key.
-func (b *Bucket) Put(rid string, ch *Channel) (err error) {
-	var (
-		room *Room
-		ok   bool
-	)
-	b.cLock.Lock()
-	// close old channel
-	if dch := b.chs[ch.Key]; dch != nil {
-		dch.Close()
+// AddChannel 将一个 Channel 加入 Bucket 中，并根据 RoomID 加入对应的 Room
+func (b *Bucket) AddChannel(roomID string, channel *Channel) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// 如果已有相同 Key 的旧 Channel，关闭它
+	if oldChannel := b.channelMap[channel.Key]; oldChannel != nil {
+		oldChannel.SendFinishSignal()
 	}
-	b.chs[ch.Key] = ch
-	if rid != "" {
-		if room, ok = b.rooms[rid]; !ok {
-			room = NewRoom(rid)
-			b.rooms[rid] = room
+	b.channelMap[channel.Key] = channel
+
+	// 加入房间
+	var room *Room
+	var exists bool
+	if roomID != "" {
+		if room, exists = b.roomMap[roomID]; !exists {
+			room = NewRoom(roomID)
+			b.roomMap[roomID] = room
 		}
-		ch.Room = room
+		channel.Room = room
 	}
-	b.ipCnts[ch.IP]++
-	b.cLock.Unlock()
+
+	// 更新 IP 连接计数
+	b.ipConnectionCount[channel.IP]++
+
+	// 将 Channel 加入 Room
 	if room != nil {
-		err = room.Put(ch)
+		return room.AddChannel(channel)
 	}
-	return
+
+	return nil
 }
 
-// Del delete the channel by sub key.
-func (b *Bucket) Del(dch *Channel) {
-	var (
-		ok   bool
-		ch   *Channel
-		room *Room
-	)
-	b.cLock.Lock()
-	if ch, ok = b.chs[dch.Key]; ok {
-		room = ch.Room
-		if ch == dch {
-			delete(b.chs, ch.Key)
+// RemoveChannel 删除指定的 Channel，并从 Room 中移除
+func (b *Bucket) RemoveChannel(channel *Channel) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// 从 Channel Map 中移除
+	if existingChannel, ok := b.channelMap[channel.Key]; ok {
+		room := existingChannel.Room
+		if existingChannel == channel {
+			delete(b.channelMap, channel.Key)
 		}
-		// ip counter
-		if b.ipCnts[ch.IP] > 1 {
-			b.ipCnts[ch.IP]--
+
+		// 更新 IP 连接计数
+		if b.ipConnectionCount[channel.IP] > 1 {
+			b.ipConnectionCount[channel.IP]--
 		} else {
-			delete(b.ipCnts, ch.IP)
+			delete(b.ipConnectionCount, channel.IP)
+		}
+
+		// 从 Room 中移除 Channel，如果 Room 为空则删除 Room
+		if room != nil && room.RemoveChannel(existingChannel) {
+			b.deleteRoom(room)
 		}
 	}
-	b.cLock.Unlock()
-	if room != nil && room.Del(ch) {
-		// if empty room, must delete from bucket
-		b.DelRoom(room)
-	}
 }
 
-// Channel get a channel by sub key.
-func (b *Bucket) Channel(key string) (ch *Channel) {
-	b.cLock.RLock()
-	ch = b.chs[key]
-	b.cLock.RUnlock()
-	return
+// Channel 根据 Key 获取 Channel
+func (b *Bucket) Channel(key string) *Channel {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.channelMap[key]
 }
 
-// Broadcast push msgs to all channels in the bucket.
-func (b *Bucket) Broadcast(p *grpc.Proto, op int32) {
-	var ch *Channel
-	b.cLock.RLock()
-	for _, ch = range b.chs {
-		if !ch.NeedPush(op) {
-			continue
+// Broadcast 向 Bucket 中的所有 Channel 广播消息
+func (b *Bucket) Broadcast(message *grpc.ProtoMsg, operation int32) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for _, channel := range b.channelMap {
+		if channel.NeedPush(operation) {
+			_ = channel.Push(message) // 忽略错误处理
 		}
-		_ = ch.Push(p)
 	}
-	b.cLock.RUnlock()
 }
 
-// Room get a room by roomid.
-func (b *Bucket) Room(rid string) (room *Room) {
-	b.cLock.RLock()
-	room = b.rooms[rid]
-	b.cLock.RUnlock()
-	return
+// Room 根据 RoomID 获取 Room
+func (b *Bucket) Room(roomID string) *Room {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.roomMap[roomID]
 }
 
-// DelRoom delete a room by roomid.
-func (b *Bucket) DelRoom(room *Room) {
-	b.cLock.Lock()
-	delete(b.rooms, room.ID)
-	b.cLock.Unlock()
+// deleteRoom 删除指定的 Room
+func (b *Bucket) deleteRoom(room *Room) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.roomMap, room.ID)
 	room.Close()
 }
 
-// BroadcastRoom broadcast a message to specified room
-func (b *Bucket) BroadcastRoom(arg *grpc.BroadcastRoomReq) {
-	num := atomic.AddUint64(&b.routinesNum, 1) % b.c.RoutineAmount
-	b.routines[num] <- arg
+// BroadcastRoom 向指定 RoomID 的 Room 广播消息
+func (b *Bucket) BroadcastRoom(request *grpc.BroadcastRoomReq) {
+	routineID := atomic.AddUint64(&b.routineCount, 1) % b.config.RoutineAmount
+	b.routines[routineID] <- request
 }
 
-// Rooms get all room id where online number > 0.
-func (b *Bucket) Rooms() (res map[string]struct{}) {
-	var (
-		roomID string
-		room   *Room
-	)
-	res = make(map[string]struct{})
-	b.cLock.RLock()
-	for roomID, room = range b.rooms {
+// Rooms 获取所有在线人数大于 0 的房间 ID
+func (b *Bucket) Rooms() map[string]struct{} {
+	result := make(map[string]struct{})
+	b.mu.RLock()
+	for roomID, room := range b.roomMap {
 		if room.Online > 0 {
-			res[roomID] = struct{}{}
+			result[roomID] = struct{}{}
 		}
 	}
-	b.cLock.RUnlock()
-	return
+	b.mu.RUnlock()
+	return result
 }
 
-// IPCount get ip count.
-func (b *Bucket) IPCount() (res map[string]struct{}) {
-	var (
-		ip string
-	)
-	b.cLock.RLock()
-	res = make(map[string]struct{}, len(b.ipCnts))
-	for ip = range b.ipCnts {
-		res[ip] = struct{}{}
+// IPCount 获取所有连接 IP 的计数
+func (b *Bucket) IPCount() map[string]struct{} {
+	result := make(map[string]struct{})
+	b.mu.RLock()
+	for ip := range b.ipConnectionCount {
+		result[ip] = struct{}{}
 	}
-	b.cLock.RUnlock()
-	return
+	b.mu.RUnlock()
+	return result
 }
 
-// UpRoomsCount update all room count
+// UpRoomsCount 更新每个房间的在线人数
 func (b *Bucket) UpRoomsCount(roomCountMap map[string]int32) {
-	var (
-		roomID string
-		room   *Room
-	)
-	b.cLock.RLock()
-	for roomID, room = range b.rooms {
-		room.AllOnline = roomCountMap[roomID]
+	b.mu.RLock()
+	for roomID, room := range b.roomMap {
+		if count, ok := roomCountMap[roomID]; ok {
+			room.AllOnline = count
+		}
 	}
-	b.cLock.RUnlock()
+	b.mu.RUnlock()
 }
 
-// roomproc
-func (b *Bucket) roomproc(c chan *grpc.BroadcastRoomReq) {
-	for {
-		arg := <-c
-		if room := b.Room(arg.RoomID); room != nil {
-			room.Push(arg.Proto)
+// roomChanProcessor 处理房间消息的协程
+func (b *Bucket) roomChanProcessor(roomChan chan *grpc.BroadcastRoomReq) {
+	for request := range roomChan {
+		// 房间存在，就推送房间消息
+		if room := b.Room(request.RoomID); room != nil {
+			// 遍历 room 中 Channel 链表，每个 Channel 都推送消息到 msgChan 中
+			room.PushMsg(request.Proto)
 		}
 	}
 }

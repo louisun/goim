@@ -22,30 +22,47 @@ var (
 	ErrChallengeResponse = errors.New("mismatch challenge/response")
 )
 
-// Upgrade Switching Protocols
-func Upgrade(rwc io.ReadWriteCloser, rr *bufio.Reader, wr *bufio.Writer, req *Request) (conn *Conn, err error) {
-	if req.Method != "GET" {
+// Upgrade 处理 WebSocket 协议升级
+func Upgrade(rwc io.ReadWriteCloser, bufferedReader *bufio.BufferedReader, bufferedWriter *bufio.BufferedWriter, request *Request) (*Conn, error) {
+	// 校验是否为 GET 方法
+	if request.Method != "GET" {
 		return nil, ErrBadRequestMethod
 	}
-	if req.Header.Get("Sec-Websocket-Version") != "13" {
+
+	// 校验 WebSocket 版本是否为 13
+	if request.Header.Get("Sec-Websocket-Version") != "13" {
 		return nil, ErrBadWebSocketVersion
 	}
-	if strings.ToLower(req.Header.Get("Upgrade")) != "websocket" {
+
+	// 校验 Upgrade 头是否为 "websocket"
+	if strings.ToLower(request.Header.Get("Upgrade")) != "websocket" {
 		return nil, ErrNotWebSocket
 	}
-	if !strings.Contains(strings.ToLower(req.Header.Get("Connection")), "upgrade") {
+
+	// 校验 Connection 头中是否包含 "upgrade"
+	if !strings.Contains(strings.ToLower(request.Header.Get("Connection")), "upgrade") {
 		return nil, ErrNotWebSocket
 	}
-	challengeKey := req.Header.Get("Sec-Websocket-Key")
+
+	// 获取客户端的 WebSocket 握手密钥
+	challengeKey := request.Header.Get("Sec-Websocket-Key")
 	if challengeKey == "" {
 		return nil, ErrChallengeResponse
 	}
-	_, _ = wr.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n")
-	_, _ = wr.WriteString("Sec-WebSocket-Accept: " + computeAcceptKey(challengeKey) + "\r\n\r\n")
-	if err = wr.Flush(); err != nil {
-		return
+
+	// 构建 WebSocket 握手响应头
+	_, _ = bufferedWriter.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
+	_, _ = bufferedWriter.WriteString("Upgrade: websocket\r\n")
+	_, _ = bufferedWriter.WriteString("Connection: Upgrade\r\n")
+	_, _ = bufferedWriter.WriteString("Sec-WebSocket-Accept: " + computeAcceptKey(challengeKey) + "\r\n\r\n")
+
+	// 刷新写缓冲区，发送响应
+	if err := bufferedWriter.Flush(); err != nil {
+		return nil, err
 	}
-	return newConn(rwc, rr, wr), nil
+
+	// 返回新建立的 WebSocket 连接
+	return newConn(rwc, bufferedReader, bufferedWriter), nil
 }
 
 func computeAcceptKey(challengeKey string) string {

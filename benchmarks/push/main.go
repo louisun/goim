@@ -87,7 +87,7 @@ func stop() {
 }
 
 func startPush(b, e int) {
-	log.Printf("start Push from %d to %d", b, e)
+	log.Printf("start PushMsg from %d to %d", b, e)
 	bodys := make([][]byte, e-b)
 	for i := 0; i < e-b; i++ {
 		msg := &pushBodyMsg{Msg: json.RawMessage(testContent), UserID: int64(b)}

@@ -9,7 +9,7 @@ import (
 
 func TestTimer(t *testing.T) {
 	timer := NewTimer(100)
-	tds := make([]*TimerData, 100)
+	tds := make([]*timerTask, 100)
 	for i := 0; i < 100; i++ {
 		tds[i] = timer.Add(time.Duration(i)*time.Second+5*time.Minute, nil)
 	}

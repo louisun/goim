@@ -758,9 +758,9 @@ func (m *OnlineReply) GetAllRoomCount() map[string]int32 {
 }
 
 type ReceiveReq struct {
-	Mid                  int64        `protobuf:"varint,1,opt,name=mid,proto3" json:"mid,omitempty"`
-	Proto                *grpc1.Proto `protobuf:"bytes,2,opt,name=proto" json:"proto,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
+	Mid                  int64           `protobuf:"varint,1,opt,name=mid,proto3" json:"mid,omitempty"`
+	Proto                *grpc1.ProtoMsg `protobuf:"bytes,2,opt,name=proto" json:"proto,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}        `json:"-"`
 	XXX_unrecognized     []byte       `json:"-"`
 	XXX_sizecache        int32        `json:"-"`
 }
@@ -805,7 +805,7 @@ func (m *ReceiveReq) GetMid() int64 {
 	return 0
 }
 
-func (m *ReceiveReq) GetProto() *grpc1.Proto {
+func (m *ReceiveReq) GetProto() *grpc1.ProtoMsg {
 	if m != nil {
 		return m.Proto
 	}
@@ -1152,7 +1152,7 @@ func (c *logicClient) Ping(ctx context.Context, in *PingReq, opts ...grpc.CallOp
 
 func (c *logicClient) Close(ctx context.Context, in *CloseReq, opts ...grpc.CallOption) (*CloseReply, error) {
 	out := new(CloseReply)
-	err := c.cc.Invoke(ctx, "/goim.logic.Logic/Close", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/goim.logic.Logic/SendFinishSignal", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1266,7 +1266,7 @@ func _Logic_Close_Handler(srv interface{}, ctx context.Context, dec func(interfa
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/goim.logic.Logic/Close",
+		FullMethod: "/goim.logic.Logic/SendFinishSignal",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(LogicServer).Close(ctx, req.(*CloseReq))
@@ -1391,7 +1391,7 @@ var _Logic_serviceDesc = grpc.ServiceDesc{
 			Handler:    _Logic_Ping_Handler,
 		},
 		{
-			MethodName: "Close",
+			MethodName: "SendFinishSignal",
 			Handler:    _Logic_Close_Handler,
 		},
 		{
@@ -3040,7 +3040,7 @@ func (m *ConnectReply) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Mid", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field MemberId", wireType)
 			}
 			m.Mid = 0
 			for shift := uint(0); ; shift += 7 {
@@ -3249,7 +3249,7 @@ func (m *DisconnectReq) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Mid", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field MemberId", wireType)
 			}
 			m.Mid = 0
 			for shift := uint(0); ; shift += 7 {
@@ -3448,7 +3448,7 @@ func (m *HeartbeatReq) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Mid", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field MemberId", wireType)
 			}
 			m.Mid = 0
 			for shift := uint(0); ; shift += 7 {
@@ -3972,7 +3972,7 @@ func (m *ReceiveReq) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Mid", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field MemberId", wireType)
 			}
 			m.Mid = 0
 			for shift := uint(0); ; shift += 7 {
@@ -3991,7 +3991,7 @@ func (m *ReceiveReq) Unmarshal(dAtA []byte) error {
 			}
 		case 2:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Proto", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field ProtoMsg", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -4016,7 +4016,7 @@ func (m *ReceiveReq) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.Proto == nil {
-				m.Proto = &grpc1.Proto{}
+				m.Proto = &grpc1.ProtoMsg{}
 			}
 			if err := m.Proto.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err

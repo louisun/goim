@@ -20,9 +20,8 @@ type Job struct {
 	c            *conf.Config
 	consumer     *cluster.Consumer
 	cometServers map[string]*Comet
-
-	rooms      map[string]*Room
-	roomsMutex sync.RWMutex
+	rooms        map[string]*Room
+	roomsMutex   sync.RWMutex
 }
 
 // New new a push job.

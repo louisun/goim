@@ -27,7 +27,7 @@ func (j *Job) push(ctx context.Context, pushMsg *pb.PushMsg) (err error) {
 // pushKeys push a message to a batch of subkeys.
 func (j *Job) pushKeys(operation int32, serverID string, subKeys []string, body []byte) (err error) {
 	buf := bytes.NewWriterSize(len(body) + 64)
-	p := &comet.Proto{
+	p := &comet.ProtoMsg{
 		Ver:  1,
 		Op:   operation,
 		Body: body,
@@ -42,7 +42,7 @@ func (j *Job) pushKeys(operation int32, serverID string, subKeys []string, body 
 	}
 	if c, ok := j.cometServers[serverID]; ok {
 		if err = c.Push(&args); err != nil {
-			log.Errorf("c.Push(%v) serverID:%s error(%v)", args, serverID, err)
+			log.Errorf("c.PushMsg(%v) serverID:%s error(%v)", args, serverID, err)
 		}
 		log.Infof("pushKey:%s comets:%d", serverID, len(j.cometServers))
 	}
@@ -52,7 +52,7 @@ func (j *Job) pushKeys(operation int32, serverID string, subKeys []string, body 
 // broadcast broadcast a message to all.
 func (j *Job) broadcast(operation int32, body []byte, speed int32) (err error) {
 	buf := bytes.NewWriterSize(len(body) + 64)
-	p := &comet.Proto{
+	p := &comet.ProtoMsg{
 		Ver:  1,
 		Op:   operation,
 		Body: body,
@@ -80,7 +80,7 @@ func (j *Job) broadcast(operation int32, body []byte, speed int32) (err error) {
 func (j *Job) broadcastRoomRawBytes(roomID string, body []byte) (err error) {
 	args := comet.BroadcastRoomReq{
 		RoomID: roomID,
-		Proto: &comet.Proto{
+		Proto: &comet.ProtoMsg{
 			Ver:  1,
 			Op:   comet.OpRaw,
 			Body: body,

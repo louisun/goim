@@ -59,15 +59,15 @@ func acceptTCP(server *Server, lis *net.TCPListener) {
 			log.Errorf("listener.Accept(\"%s\") error(%v)", lis.Addr().String(), err)
 			return
 		}
-		if err = conn.SetKeepAlive(server.c.TCP.KeepAlive); err != nil {
+		if err = conn.SetKeepAlive(server.config.TCP.KeepAlive); err != nil {
 			log.Errorf("conn.SetKeepAlive() error(%v)", err)
 			return
 		}
-		if err = conn.SetReadBuffer(server.c.TCP.Rcvbuf); err != nil {
+		if err = conn.SetReadBuffer(server.config.TCP.Rcvbuf); err != nil {
 			log.Errorf("conn.SetReadBuffer() error(%v)", err)
 			return
 		}
-		if err = conn.SetWriteBuffer(server.c.TCP.Sndbuf); err != nil {
+		if err = conn.SetWriteBuffer(server.config.TCP.Sndbuf); err != nil {
 			log.Errorf("conn.SetWriteBuffer() error(%v)", err)
 			return
 		}
@@ -80,10 +80,13 @@ func acceptTCP(server *Server, lis *net.TCPListener) {
 
 func serveTCP(s *Server, conn *net.TCPConn, r int) {
 	var (
-		// timer
-		tr = s.round.Timer(r)
-		rp = s.round.Reader(r)
-		wp = s.round.Writer(r)
+		// timer: 自定义 Timer
+		timer = s.round.Timer(r)
+		// read bytes pool: *bytes.Pool
+		readBytesPool = s.round.Reader(r)
+		// write bytes pool: *bytes.Pool
+		writeBytesPool = s.round.Writer(r)
+
 		// ip addr
 		lAddr = conn.LocalAddr().String()
 		rAddr = conn.RemoteAddr().String()
@@ -91,239 +94,285 @@ func serveTCP(s *Server, conn *net.TCPConn, r int) {
 	if conf.Conf.Debug {
 		log.Infof("start tcp serve \"%s\" with \"%s\"", lAddr, rAddr)
 	}
-	s.ServeTCP(conn, rp, wp, tr)
+	s.ServeTCP(conn, readBytesPool, writeBytesPool, timer)
 }
 
-// ServeTCP serve a tcp connection.
-func (s *Server) ServeTCP(conn *net.TCPConn, rp, wp *bytes.Pool, tr *xtime.Timer) {
+// ServeTCP 处理一个 TCP 连接
+func (s *Server) ServeTCP(conn *net.TCPConn, readPool, writePool *bytes.Pool, timer *xtime.Timer) {
 	var (
-		err     error
-		rid     string
-		accepts []int32
-		hb      time.Duration
-		white   bool
-		p       *grpc.Proto
-		b       *Bucket
-		trd     *xtime.TimerData
-		lastHb  = time.Now()
-		rb      = rp.Get()
-		wb      = wp.Get()
-		ch      = NewChannel(s.c.Protocol.CliProto, s.c.Protocol.SvrProto)
-		rr      = &ch.Reader
-		wr      = &ch.Writer
+		err error
+
+		roomID            string           // 房间ID
+		acceptProtocols   []int32          // 可接受的协议
+		heartbeatInterval time.Duration    // 心跳间隔
+		isInWhiteList     bool             // 是否在白名单中
+		clientProto       *grpc.ProtoMsg   // 客户端协议消息
+		bucket            *Bucket          // 连接的 bucket
+		timerTask         *xtime.TimerTask // 定时器数据
+		lastHeartbeat     = time.Now()     // 上次心跳时间
+
+		readBuffer  = readPool.Get()  // 读取缓冲区
+		writeBuffer = writePool.Get() // 写入缓冲区
+
+		channel        = NewChannel(s.config.Protocol.MsgRingBufferSize, s.config.Protocol.MsgChannelSize) // 创建一个新的 Channel
+		bufferedReader = &channel.Reader                                                                   // 缓冲读取器
+		bufferedWriter = &channel.Writer                                                                   // 缓冲写入器
 	)
-	ch.Reader.ResetBuffer(conn, rb.Bytes())
-	ch.Writer.ResetBuffer(conn, wb.Bytes())
+
+	// 初始化读写缓冲区
+	channel.Reader.ResetBuffer(conn, readBuffer.Bytes())
+	channel.Writer.ResetBuffer(conn, writeBuffer.Bytes())
+
+	// 创建上下文，方便后续取消
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// handshake
+
+	// 开始握手
 	step := 0
-	trd = tr.Add(time.Duration(s.c.Protocol.HandshakeTimeout), func() {
+	timerTask = timer.Add(time.Duration(s.config.Protocol.HandshakeTimeout), func() {
 		conn.Close()
-		log.Errorf("key: %s remoteIP: %s step: %d tcp handshake timeout", ch.Key, conn.RemoteAddr().String(), step)
+		log.Errorf("key: %s remoteIP: %s step: %d tcp handshake timeout", channel.Key, conn.RemoteAddr().String(), step)
 	})
-	ch.IP, _, _ = net.SplitHostPort(conn.RemoteAddr().String())
-	// must not setadv, only used in auth
+
+	// 获取客户端IP地址
+	channel.IP, _, _ = net.SplitHostPort(conn.RemoteAddr().String())
+
+	// 握手步骤1：读取客户端协议
 	step = 1
-	if p, err = ch.CliProto.Set(); err == nil {
-		if ch.Mid, ch.Key, rid, accepts, hb, err = s.authTCP(ctx, rr, wr, p); err == nil {
-			ch.Watch(accepts...)
-			b = s.Bucket(ch.Key)
-			err = b.Put(rid, ch)
+	if clientProto, err = channel.MsgRing.GetWriteMsg(); err == nil {
+		// 进行TCP认证
+		if channel.MemberId, channel.Key, roomID, acceptProtocols, heartbeatInterval, err = s.authTCP(ctx, bufferedReader, bufferedWriter, clientProto); err == nil {
+			// 认证成功后，设置监听的协议
+			channel.Watch(acceptProtocols...)
+			bucket = s.Bucket(channel.Key)
+			err = bucket.AddChannel(roomID, channel)
 			if conf.Conf.Debug {
-				log.Infof("tcp connnected key:%s mid:%d proto:%+v", ch.Key, ch.Mid, p)
+				log.Infof("tcp connected key:%s mid:%d proto:%+v", channel.Key, channel.MemberId, clientProto)
 			}
 		}
 	}
+
+	// 握手步骤2：处理错误
 	step = 2
 	if err != nil {
 		conn.Close()
-		rp.Put(rb)
-		wp.Put(wb)
-		tr.Del(trd)
-		log.Errorf("key: %s handshake failed error(%v)", ch.Key, err)
+		readPool.Put(readBuffer)
+		writePool.Put(writeBuffer)
+		timer.Remove(timerTask)
+		log.Errorf("key: %s handshake failed error(%v)", channel.Key, err)
 		return
 	}
-	trd.Key = ch.Key
-	tr.Set(trd, hb)
-	white = whitelist.Contains(ch.Mid)
-	if white {
-		whitelist.Printf("key: %s[%s] auth\n", ch.Key, rid)
+
+	// 设置心跳定时器
+	timerTask.Key = channel.Key
+	timer.Update(timerTask, heartbeatInterval)
+	isInWhiteList = whitelist.Contains(channel.MemberId)
+	if isInWhiteList {
+		whitelist.Printf("key: %s[%s] auth\n", channel.Key, roomID)
 	}
-	step = 3
-	// hanshake ok start dispatch goroutine
-	go s.dispatchTCP(conn, wr, wp, wb, ch)
-	serverHeartbeat := s.RandServerHearbeat()
+
+	// 握手步骤3：启动写协程
+	go s.writePumpTcp(conn, bufferedWriter, writePool, writeBuffer, channel)
+
+	// 随机生成服务器心跳间隔
+	serverHeartbeatInterval := s.RandServerHearbeat()
+
+	// 开始读写循环
 	for {
-		if p, err = ch.CliProto.Set(); err != nil {
+		// 写入客户端协议
+		if clientProto, err = channel.MsgRing.GetWriteMsg(); err != nil {
 			break
 		}
-		if white {
-			whitelist.Printf("key: %s start read proto\n", ch.Key)
+
+		if isInWhiteList {
+			whitelist.Printf("key: %s start read proto\n", channel.Key)
 		}
-		if err = p.ReadTCP(rr); err != nil {
+
+		// 读取TCP协议数据
+		if err = clientProto.ReadTCP(bufferedReader); err != nil {
 			break
 		}
-		if white {
-			whitelist.Printf("key: %s read proto:%v\n", ch.Key, p)
+
+		if isInWhiteList {
+			whitelist.Printf("key: %s read proto:%v\n", channel.Key, clientProto)
 		}
-		if p.Op == grpc.OpHeartbeat {
-			tr.Set(trd, hb)
-			p.Op = grpc.OpHeartbeatReply
-			p.Body = nil
-			// NOTE: send server heartbeat for a long time
-			if now := time.Now(); now.Sub(lastHb) > serverHeartbeat {
-				if err1 := s.Heartbeat(ctx, ch.Mid, ch.Key); err1 == nil {
-					lastHb = now
+
+		// 处理心跳协议
+		if clientProto.Op == grpc.OpHeartbeat {
+			timer.Update(timerTask, heartbeatInterval)
+			clientProto.Op = grpc.OpHeartbeatReply
+			clientProto.Body = nil
+
+			// 发送服务器心跳
+			if now := time.Now(); now.Sub(lastHeartbeat) > serverHeartbeatInterval {
+				if err1 := s.Heartbeat(ctx, channel.MemberId, channel.Key); err1 == nil {
+					lastHeartbeat = now
 				}
 			}
+
 			if conf.Conf.Debug {
-				log.Infof("tcp heartbeat receive key:%s, mid:%d", ch.Key, ch.Mid)
+				log.Infof("tcp heartbeat receive key:%s, mid:%d", channel.Key, channel.MemberId)
 			}
+
 			step++
 		} else {
-			if err = s.Operate(ctx, p, ch, b); err != nil {
+			// 处理业务操作
+			if err = s.Operate(ctx, clientProto, channel, bucket); err != nil {
 				break
 			}
 		}
-		if white {
-			whitelist.Printf("key: %s process proto:%v\n", ch.Key, p)
+
+		if isInWhiteList {
+			whitelist.Printf("key: %s process proto:%v\n", channel.Key, clientProto)
 		}
-		ch.CliProto.SetAdv()
-		ch.Signal()
-		if white {
-			whitelist.Printf("key: %s signal\n", ch.Key)
+
+		// 更新写索引并发信号
+		channel.MsgRing.AdvanceWriteIndex()
+		channel.ReadReady()
+
+		if isInWhiteList {
+			whitelist.Printf("key: %s msgChan\n", channel.Key)
 		}
 	}
-	if white {
-		whitelist.Printf("key: %s server tcp error(%v)\n", ch.Key, err)
+
+	// 错误处理
+	if isInWhiteList {
+		whitelist.Printf("key: %s server tcp error(%v)\n", channel.Key, err)
 	}
+
+	// 处理非 EOF 错误
 	if err != nil && err != io.EOF && !strings.Contains(err.Error(), "closed") {
-		log.Errorf("key: %s server tcp failed error(%v)", ch.Key, err)
+		log.Errorf("key: %s server tcp failed error(%v)", channel.Key, err)
 	}
-	b.Del(ch)
-	tr.Del(trd)
-	rp.Put(rb)
+
+	// 连接关闭处理
+	bucket.RemoveChannel(channel)
+	timer.Del(timerTask)
+	readPool.Put(readBuffer)
 	conn.Close()
-	ch.Close()
-	if err = s.Disconnect(ctx, ch.Mid, ch.Key); err != nil {
-		log.Errorf("key: %s mid: %d operator do disconnect error(%v)", ch.Key, ch.Mid, err)
+	channel.SendFinishSignal()
+
+	// 断开连接的回调
+	if err = s.Disconnect(ctx, channel.MemberId, channel.Key); err != nil {
+		log.Errorf("key: %s mid: %d operator do disconnect error(%v)", channel.Key, channel.MemberId, err)
 	}
-	if white {
-		whitelist.Printf("key: %s mid: %d disconnect error(%v)\n", ch.Key, ch.Mid, err)
+
+	if isInWhiteList {
+		whitelist.Printf("key: %s mid: %d disconnect error(%v)\n", channel.Key, channel.MemberId, err)
 	}
+
 	if conf.Conf.Debug {
-		log.Infof("tcp disconnected key: %s mid: %d", ch.Key, ch.Mid)
+		log.Infof("tcp disconnected key: %s mid: %d", channel.Key, channel.MemberId)
 	}
 }
 
 // dispatch accepts connections on the listener and serves requests
 // for each incoming connection.  dispatch blocks; the caller typically
 // invokes it in a go statement.
-func (s *Server) dispatchTCP(conn *net.TCPConn, wr *bufio.Writer, wp *bytes.Pool, wb *bytes.Buffer, ch *Channel) {
+func (s *Server) writePumpTcp(conn *net.TCPConn, bufferedWriter *bufio.BufferedWriter, writeBytesPool *bytes.Pool, wb *bytes.Buffer, channel *Channel) {
 	var (
 		err    error
 		finish bool
 		online int32
-		white  = whitelist.Contains(ch.Mid)
+		white  = whitelist.Contains(channel.MemberId)
 	)
 	if conf.Conf.Debug {
-		log.Infof("key: %s start dispatch tcp goroutine", ch.Key)
+		log.Infof("key: %s start dispatch tcp goroutine", channel.Key)
 	}
 	for {
 		if white {
-			whitelist.Printf("key: %s wait proto ready\n", ch.Key)
+			whitelist.Printf("key: %s wait proto ready\n", channel.Key)
 		}
-		var p = ch.Ready()
+		var p = channel.Ready()
 		if white {
-			whitelist.Printf("key: %s proto ready\n", ch.Key)
+			whitelist.Printf("key: %s proto ready\n", channel.Key)
 		}
 		if conf.Conf.Debug {
-			log.Infof("key:%s dispatch msg:%v", ch.Key, *p)
+			log.Infof("key:%s dispatch msg:%v", channel.Key, *p)
 		}
 		switch p {
 		case grpc.ProtoFinish:
 			if white {
-				whitelist.Printf("key: %s receive proto finish\n", ch.Key)
+				whitelist.Printf("key: %s receive proto finish\n", channel.Key)
 			}
 			if conf.Conf.Debug {
-				log.Infof("key: %s wakeup exit dispatch goroutine", ch.Key)
+				log.Infof("key: %s wakeup exit dispatch goroutine", channel.Key)
 			}
 			finish = true
 			goto failed
-		case grpc.ProtoReady:
+		case grpc.ProtoReadReady:
 			// fetch message from svrbox(client send)
 			for {
-				if p, err = ch.CliProto.Get(); err != nil {
+				if p, err = channel.MsgRing.GetReadMsg(); err != nil {
 					break
 				}
 				if white {
-					whitelist.Printf("key: %s start write client proto%v\n", ch.Key, p)
+					whitelist.Printf("key: %s start write client proto%v\n", channel.Key, p)
 				}
 				if p.Op == grpc.OpHeartbeatReply {
-					if ch.Room != nil {
-						online = ch.Room.OnlineNum()
+					if channel.Room != nil {
+						online = channel.Room.OnlineNum()
 					}
-					if err = p.WriteTCPHeart(wr, online); err != nil {
+					if err = p.WriteTCPHeart(bufferedWriter, online); err != nil {
 						goto failed
 					}
 				} else {
-					if err = p.WriteTCP(wr); err != nil {
+					if err = p.WriteTCP(bufferedWriter); err != nil {
 						goto failed
 					}
 				}
 				if white {
-					whitelist.Printf("key: %s write client proto%v\n", ch.Key, p)
+					whitelist.Printf("key: %s write client proto%v\n", channel.Key, p)
 				}
 				p.Body = nil // avoid memory leak
-				ch.CliProto.GetAdv()
+				channel.MsgRing.AdvanceReadIndex()
 			}
 		default:
 			if white {
-				whitelist.Printf("key: %s start write server proto%v\n", ch.Key, p)
+				whitelist.Printf("key: %s start write server proto%v\n", channel.Key, p)
 			}
 			// server send
-			if err = p.WriteTCP(wr); err != nil {
+			if err = p.WriteTCP(bufferedWriter); err != nil {
 				goto failed
 			}
 			if white {
-				whitelist.Printf("key: %s write server proto%v\n", ch.Key, p)
+				whitelist.Printf("key: %s write server proto%v\n", channel.Key, p)
 			}
 			if conf.Conf.Debug {
-				log.Infof("tcp sent a message key:%s mid:%d proto:%+v", ch.Key, ch.Mid, p)
+				log.Infof("tcp sent a message key:%s mid:%d proto:%+v", channel.Key, channel.MemberId, p)
 			}
 		}
 		if white {
-			whitelist.Printf("key: %s start flush \n", ch.Key)
+			whitelist.Printf("key: %s start flush \n", channel.Key)
 		}
 		// only hungry flush response
-		if err = wr.Flush(); err != nil {
+		if err = bufferedWriter.Flush(); err != nil {
 			break
 		}
 		if white {
-			whitelist.Printf("key: %s flush\n", ch.Key)
+			whitelist.Printf("key: %s flush\n", channel.Key)
 		}
 	}
 failed:
 	if white {
-		whitelist.Printf("key: %s dispatch tcp error(%v)\n", ch.Key, err)
+		whitelist.Printf("key: %s dispatch tcp error(%v)\n", channel.Key, err)
 	}
 	if err != nil {
-		log.Errorf("key: %s dispatch tcp error(%v)", ch.Key, err)
+		log.Errorf("key: %s dispatch tcp error(%v)", channel.Key, err)
 	}
 	conn.Close()
-	wp.Put(wb)
-	// must ensure all channel message discard, for reader won't blocking Signal
+	writeBytesPool.Put(wb)
+	// must ensure all channel message discard, for reader won't blocking ReadReady
 	for !finish {
-		finish = (ch.Ready() == grpc.ProtoFinish)
+		finish = (channel.Ready() == grpc.ProtoFinish)
 	}
 	if conf.Conf.Debug {
-		log.Infof("key: %s dispatch goroutine exit", ch.Key)
+		log.Infof("key: %s dispatch goroutine exit", channel.Key)
 	}
 }
 
 // auth for goim handshake with client, use rsa & aes.
-func (s *Server) authTCP(ctx context.Context, rr *bufio.Reader, wr *bufio.Writer, p *grpc.Proto) (mid int64, key, rid string, accepts []int32, hb time.Duration, err error) {
+func (s *Server) authTCP(ctx context.Context, rr *bufio.BufferedReader, wr *bufio.BufferedWriter, p *grpc.ProtoMsg) (mid int64, key, rid string, accepts []int32, hb time.Duration, err error) {
 	for {
 		if err = p.ReadTCP(rr); err != nil {
 			return

@@ -20,8 +20,13 @@ type RoundOptions struct {
 
 // Round userd for connection round-robin get a reader/writer/timer for split big lock.
 type Round struct {
+	// 默认参数：每个 Pool 1024 个 Buffer, 每个 Buffer 底层 8KB 字节，总共 8MB
+	// 32 个 Pool，总共 256MB
 	readers []bytes.Pool
+	// 默认参数：每个 Pool 1024 个 Buffer, 每个 Buffer 底层 8KB 字节，总共 8MB
+	// 32 个 Pool，总共 256MB
 	writers []bytes.Pool
+	// 默认参数：32 个 Timer (自定义结构），每个 Timer 结构有 2048 个 timerTask
 	timers  []time.Timer
 	options RoundOptions
 }
@@ -31,14 +36,14 @@ func NewRound(c *conf.Config) (r *Round) {
 	var i int
 	r = &Round{
 		options: RoundOptions{
-			Reader:       c.TCP.Reader,
-			ReadBuf:      c.TCP.ReadBuf,
-			ReadBufSize:  c.TCP.ReadBufSize,
-			Writer:       c.TCP.Writer,
-			WriteBuf:     c.TCP.WriteBuf,
-			WriteBufSize: c.TCP.WriteBufSize,
-			Timer:        c.Protocol.Timer,
-			TimerSize:    c.Protocol.TimerSize,
+			Reader:       c.TCP.Reader,         // 32 []Pool
+			ReadBuf:      c.TCP.ReadBuf,        // 1K Buffer
+			ReadBufSize:  c.TCP.ReadBufSize,    // 8K ss]byte
+			Writer:       c.TCP.Writer,         // 32 []Pool
+			WriteBuf:     c.TCP.WriteBuf,       // 1K Buffer
+			WriteBufSize: c.TCP.WriteBufSize,   // 8K []byte
+			Timer:        c.Protocol.Timer,     // 32 []Timer
+			TimerSize:    c.Protocol.TimerSize, // 2048 (task size)
 		}}
 	// reader
 	r.readers = make([]bytes.Pool, r.options.Reader)

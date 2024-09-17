@@ -27,8 +27,8 @@ func NewRoom(id string) (r *Room) {
 	return
 }
 
-// Put put channel into the room.
-func (r *Room) Put(ch *Channel) (err error) {
+// AddChannel put channel into the room.
+func (r *Room) AddChannel(ch *Channel) (err error) {
 	r.rLock.Lock()
 	if !r.drop {
 		if r.next != nil {
@@ -45,8 +45,8 @@ func (r *Room) Put(ch *Channel) (err error) {
 	return
 }
 
-// Del delete channel from the room.
-func (r *Room) Del(ch *Channel) bool {
+// RemoveChannel delete channel from the room.
+func (r *Room) RemoveChannel(ch *Channel) bool {
 	r.rLock.Lock()
 	if ch.Next != nil {
 		// if not footer
@@ -64,8 +64,8 @@ func (r *Room) Del(ch *Channel) bool {
 	return r.drop
 }
 
-// Push push msg to the room, if chan full discard it.
-func (r *Room) Push(p *grpc.Proto) {
+// PushMsg push msg to the room, if chan full discard it.
+func (r *Room) PushMsg(p *grpc.ProtoMsg) {
 	r.rLock.RLock()
 	for ch := r.next; ch != nil; ch = ch.Next {
 		_ = ch.Push(p)
@@ -77,7 +77,7 @@ func (r *Room) Push(p *grpc.Proto) {
 func (r *Room) Close() {
 	r.rLock.RLock()
 	for ch := r.next; ch != nil; ch = ch.Next {
-		ch.Close()
+		ch.SendFinishSignal()
 	}
 	r.rLock.RUnlock()
 }

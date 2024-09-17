@@ -188,6 +188,7 @@ func (d *Dao) KeysByMids(c context.Context, mids []int64) (ress map[string]strin
 func (d *Dao) AddServerOnline(c context.Context, server string, online *model.Online) (err error) {
 	roomsMap := map[uint32]map[string]int32{}
 	for room, count := range online.RoomCount {
+		// 该 service 的 roomId 和 count
 		rMap := roomsMap[cityhash.CityHash32([]byte(room), uint32(len(room)))%64]
 		if rMap == nil {
 			rMap = make(map[string]int32)

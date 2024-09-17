@@ -89,11 +89,11 @@ func Default() *Config {
 			Bind: []string{":3102"},
 		},
 		Protocol: &Protocol{
-			Timer:            32,
-			TimerSize:        2048,
-			CliProto:         5,
-			SvrProto:         10,
-			HandshakeTimeout: xtime.Duration(time.Second * 5),
+			Timer:             32,
+			TimerSize:         2048,
+			MsgRingBufferSize: 5,
+			MsgChannelSize:    10,
+			HandshakeTimeout:  xtime.Duration(time.Second * 5),
 		},
 		Bucket: &Bucket{
 			Size:          32,
@@ -173,11 +173,11 @@ type Websocket struct {
 
 // Protocol is protocol config.
 type Protocol struct {
-	Timer            int
-	TimerSize        int
-	SvrProto         int
-	CliProto         int
-	HandshakeTimeout xtime.Duration
+	Timer             int
+	TimerSize         int
+	MsgChannelSize    int
+	MsgRingBufferSize int
+	HandshakeTimeout  xtime.Duration
 }
 
 // Bucket is bucket config.

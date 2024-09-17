@@ -7,81 +7,99 @@ import (
 	"github.com/Terry-Mao/goim/pkg/bufio"
 )
 
-// Channel used by message pusher send msg to write goroutine.
+// Channel 用于消息推送，消息通过写入协程发送。
 type Channel struct {
-	Room     *Room
-	CliProto Ring
-	signal   chan *grpc.Proto
-	Writer   bufio.Writer
-	Reader   bufio.Reader
-	Next     *Channel
-	Prev     *Channel
+	// 每个 channel 属于一个 room
+	Room *Room
 
-	Mid      int64
-	Key      string
-	IP       string
+	// 每个 channel 拥有一个环形缓冲区，用于存储客户端协议数据
+	MsgRing MsgRingBuffer
+
+	// 带缓冲的信号通道，Ready() 从这里读取要处理的消息
+	msgChan chan *grpc.ProtoMsg
+
+	// 绑定的写入和读取缓冲区，与连接 (conn) 相关联
+	Writer bufio.BufferedWriter
+	Reader bufio.BufferedReader
+
+	// 链表，用于管理多个 channel
+	Next *Channel
+	Prev *Channel
+
+	// 用户的唯一标识
+	MemberId int64
+	// 用户的唯一 key
+	Key string
+	// 用户的 IP 地址
+	IP string
+
+	// 存储该 channel 监听的操作类型
 	watchOps map[int32]struct{}
-	mutex    sync.RWMutex
+	// 读写锁，保护 watchOps
+	mutex sync.RWMutex
 }
 
-// NewChannel new a channel.
-func NewChannel(cli, svr int) *Channel {
+// NewChannel 创建一个新的 channel。
+func NewChannel(msgRingBufferSize, msgChannelSize int) *Channel {
 	c := new(Channel)
-	c.CliProto.Init(cli)
-	c.signal = make(chan *grpc.Proto, svr)
+	// 初始化客户端协议缓冲区
+	c.MsgRing.Init(msgRingBufferSize)
+	// 初始化带缓冲的信号通道
+	c.msgChan = make(chan *grpc.ProtoMsg, msgChannelSize)
+	// 初始化操作类型的监听表
 	c.watchOps = make(map[int32]struct{})
 	return c
 }
 
-// Watch watch a operation.
-func (c *Channel) Watch(accepts ...int32) {
+// Watch 监听一组操作类型。
+func (c *Channel) Watch(ops ...int32) {
 	c.mutex.Lock()
-	for _, op := range accepts {
+	for _, op := range ops {
+		// 将指定操作类型加入监听表
 		c.watchOps[op] = struct{}{}
 	}
 	c.mutex.Unlock()
 }
 
-// UnWatch unwatch an operation
-func (c *Channel) UnWatch(accepts ...int32) {
+// UnWatch 取消监听一组操作类型。
+func (c *Channel) UnWatch(ops ...int32) {
 	c.mutex.Lock()
-	for _, op := range accepts {
+	for _, op := range ops {
+		// 从监听表中删除指定操作类型
 		delete(c.watchOps, op)
 	}
 	c.mutex.Unlock()
 }
 
-// NeedPush verify if in watch.
+// NeedPush 判断指定操作类型是否被监听。
 func (c *Channel) NeedPush(op int32) bool {
 	c.mutex.RLock()
-	if _, ok := c.watchOps[op]; ok {
-		c.mutex.RUnlock()
-		return true
-	}
+	// 如果操作类型存在于监听表中，返回 true
+	_, ok := c.watchOps[op]
 	c.mutex.RUnlock()
-	return false
+	return ok
 }
 
-// Push server push message.
-func (c *Channel) Push(p *grpc.Proto) (err error) {
+// Push 服务端推送消息到 channel。
+func (c *Channel) Push(p *grpc.ProtoMsg) (err error) {
 	select {
-	case c.signal <- p:
-	default:
+	case c.msgChan <- p: // 尝试将消息推送到信号通道
+	default: // 如果通道已满，消息将被丢弃
 	}
 	return
 }
 
-// Ready check the channel ready or close?
-func (c *Channel) Ready() *grpc.Proto {
-	return <-c.signal
+// Ready 从信号通道中读取并返回下一个准备好的消息。
+func (c *Channel) Ready() *grpc.ProtoMsg {
+	return <-c.msgChan
 }
 
-// Signal send signal to the channel, protocol ready.
-func (c *Channel) Signal() {
-	c.signal <- grpc.ProtoReady
+// ReadReady 向 channel 发送信号，表示有消息准备就绪。
+func (c *Channel) ReadReady() {
+	c.msgChan <- grpc.ProtoReadReady
 }
 
-// Close close the channel.
-func (c *Channel) Close() {
-	c.signal <- grpc.ProtoFinish
+// SendFinishSignal 关闭 channel，发送关闭协议。
+func (c *Channel) SendFinishSignal() {
+	c.msgChan <- grpc.ProtoFinish
 }

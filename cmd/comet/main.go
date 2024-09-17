@@ -38,9 +38,12 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	println(conf.Conf.Debug)
 	log.Infof("goim-comet [version: %s env: %+v] start", ver, conf.Conf.Env)
-	// register discovery
+
+	// comet 启动时候，注册到 discovery
+	// discovery client
 	dis := naming.New(conf.Conf.Discovery)
 	resolver.Register(dis)
+
 	// new comet server
 	srv := comet.NewServer(conf.Conf)
 	if err := comet.InitWhitelist(conf.Conf.Whitelist); err != nil {
@@ -57,23 +60,32 @@ func main() {
 			panic(err)
 		}
 	}
+
 	// new grpc server
 	rpcSrv := grpc.New(conf.Conf.RPCServer, srv)
 	cancel := register(dis, srv)
-	// signal
+
+	// 监听 sig 信号
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
+
 	for {
 		s := <-c
 		log.Infof("goim-comet get a signal %s", s.String())
 		switch s {
 		case syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT:
+			// 监听到 sigquit, sigterm, sigint 信号
 			if cancel != nil {
+				// 执行 cancel
 				cancel()
 			}
+
+			// grpcSrv 优雅停机
 			rpcSrv.GracefulStop()
+			// comet server close
 			srv.Close()
 			log.Infof("goim-comet [version: %s] exit", ver)
+			// 日志刷盘
 			log.Flush()
 			return
 		case syscall.SIGHUP:
@@ -87,6 +99,7 @@ func register(dis *naming.Discovery, srv *comet.Server) context.CancelFunc {
 	env := conf.Conf.Env
 	addr := ip.InternalIP()
 	_, port, _ := net.SplitHostPort(conf.Conf.RPCServer.Addr)
+	// 继续注册到 discover
 	ins := &naming.Instance{
 		Region:   env.Region,
 		Zone:     env.Zone,
@@ -106,6 +119,7 @@ func register(dis *naming.Discovery, srv *comet.Server) context.CancelFunc {
 	if err != nil {
 		panic(err)
 	}
+
 	// renew discovery metadata
 	go func() {
 		for {
@@ -123,7 +137,7 @@ func register(dis *naming.Discovery, srv *comet.Server) context.CancelFunc {
 			ins.Metadata[md.MetaConnCount] = fmt.Sprint(conns)
 			ins.Metadata[md.MetaIPCount] = fmt.Sprint(len(ips))
 			if err = dis.Set(ins); err != nil {
-				log.Errorf("dis.Set(%+v) error(%v)", ins, err)
+				log.Errorf("dis.GetWriteMsg(%+v) error(%v)", ins, err)
 				time.Sleep(time.Second)
 				continue
 			}

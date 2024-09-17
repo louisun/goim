@@ -41,14 +41,14 @@ var (
 )
 
 var (
-	// ProtoReady proto ready
-	ProtoReady = &Proto{Op: OpProtoReady}
+	// ProtoReadReady proto ready
+	ProtoReadReady = &ProtoMsg{Op: OpProtoReady}
 	// ProtoFinish proto finish
-	ProtoFinish = &Proto{Op: OpProtoFinish}
+	ProtoFinish = &ProtoMsg{Op: OpProtoFinish}
 )
 
 // WriteTo write a proto to bytes writer.
-func (p *Proto) WriteTo(b *bytes.Writer) {
+func (p *ProtoMsg) WriteTo(b *bytes.Writer) {
 	var (
 		packLen = _rawHeaderSize + int32(len(p.Body))
 		buf     = b.Peek(_rawHeaderSize)
@@ -64,7 +64,7 @@ func (p *Proto) WriteTo(b *bytes.Writer) {
 }
 
 // ReadTCP read a proto from TCP reader.
-func (p *Proto) ReadTCP(rr *bufio.Reader) (err error) {
+func (p *ProtoMsg) ReadTCP(rr *bufio.BufferedReader) (err error) {
 	var (
 		bodyLen   int
 		headerLen int16
@@ -94,7 +94,7 @@ func (p *Proto) ReadTCP(rr *bufio.Reader) (err error) {
 }
 
 // WriteTCP write a proto to TCP writer.
-func (p *Proto) WriteTCP(wr *bufio.Writer) (err error) {
+func (p *ProtoMsg) WriteTCP(wr *bufio.BufferedWriter) (err error) {
 	var (
 		buf     []byte
 		packLen int32
@@ -120,7 +120,7 @@ func (p *Proto) WriteTCP(wr *bufio.Writer) (err error) {
 }
 
 // WriteTCPHeart write TCP heartbeat with room online.
-func (p *Proto) WriteTCPHeart(wr *bufio.Writer, online int32) (err error) {
+func (p *ProtoMsg) WriteTCPHeart(wr *bufio.BufferedWriter, online int32) (err error) {
 	var (
 		buf     []byte
 		packLen int
@@ -141,7 +141,7 @@ func (p *Proto) WriteTCPHeart(wr *bufio.Writer, online int32) (err error) {
 }
 
 // ReadWebsocket read a proto from websocket connection.
-func (p *Proto) ReadWebsocket(ws *websocket.Conn) (err error) {
+func (p *ProtoMsg) ReadWebsocket(ws *websocket.Conn) (err error) {
 	var (
 		bodyLen   int
 		headerLen int16
@@ -174,12 +174,14 @@ func (p *Proto) ReadWebsocket(ws *websocket.Conn) (err error) {
 }
 
 // WriteWebsocket write a proto to websocket connection.
-func (p *Proto) WriteWebsocket(ws *websocket.Conn) (err error) {
+func (p *ProtoMsg) WriteWebsocket(ws *websocket.Conn) (err error) {
 	var (
 		buf     []byte
 		packLen int
 	)
+
 	packLen = _rawHeaderSize + len(p.Body)
+
 	if err = ws.WriteHeader(websocket.BinaryMessage, packLen); err != nil {
 		return
 	}
@@ -191,6 +193,7 @@ func (p *Proto) WriteWebsocket(ws *websocket.Conn) (err error) {
 	binary.BigEndian.PutInt16(buf[_verOffset:], int16(p.Ver))
 	binary.BigEndian.PutInt32(buf[_opOffset:], p.Op)
 	binary.BigEndian.PutInt32(buf[_seqOffset:], p.Seq)
+
 	if p.Body != nil {
 		err = ws.WriteBody(p.Body)
 	}
@@ -198,7 +201,7 @@ func (p *Proto) WriteWebsocket(ws *websocket.Conn) (err error) {
 }
 
 // WriteWebsocketHeart write websocket heartbeat with room online.
-func (p *Proto) WriteWebsocketHeart(wr *websocket.Conn, online int32) (err error) {
+func (p *ProtoMsg) WriteWebsocketHeart(wr *websocket.Conn, online int32) (err error) {
 	var (
 		buf     []byte
 		packLen int

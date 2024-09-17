@@ -78,7 +78,7 @@ func main() {
 }
 
 func startPush(b, e int, delay time.Duration) {
-	log.Printf("start Push from %d to %d", b, e)
+	log.Printf("start PushMsg from %d to %d", b, e)
 
 	for {
 		for i := b; i < e; i++ {

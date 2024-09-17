@@ -14,7 +14,7 @@ import (
 )
 
 // Connect connected a connection.
-func (s *Server) Connect(c context.Context, p *model.Proto, cookie string) (mid int64, key, rid string, accepts []int32, heartbeat time.Duration, err error) {
+func (s *Server) Connect(c context.Context, p *model.ProtoMsg, cookie string) (mid int64, key, roomID string, accepts []int32, heartbeat time.Duration, err error) {
 	reply, err := s.rpcClient.Connect(c, &logic.ConnectReq{
 		Server: s.serverID,
 		Cookie: cookie,
@@ -59,35 +59,35 @@ func (s *Server) RenewOnline(ctx context.Context, serverID string, rommCount map
 }
 
 // Receive receive a message.
-func (s *Server) Receive(ctx context.Context, mid int64, p *model.Proto) (err error) {
+func (s *Server) Receive(ctx context.Context, mid int64, p *model.ProtoMsg) (err error) {
 	_, err = s.rpcClient.Receive(ctx, &logic.ReceiveReq{Mid: mid, Proto: p})
 	return
 }
 
 // Operate operate.
-func (s *Server) Operate(ctx context.Context, p *model.Proto, ch *Channel, b *Bucket) error {
-	switch p.Op {
+func (s *Server) Operate(ctx context.Context, msg *model.ProtoMsg, ch *Channel, bucket *Bucket) error {
+	switch msg.Op {
 	case model.OpChangeRoom:
-		if err := b.ChangeRoom(string(p.Body), ch); err != nil {
-			log.Errorf("b.ChangeRoom(%s) error(%v)", p.Body, err)
+		if err := bucket.ChangeRoom(string(msg.Body), ch); err != nil {
+			log.Errorf("bucket.ChangeRoom(%s) error(%v)", msg.Body, err)
 		}
-		p.Op = model.OpChangeRoomReply
+		msg.Op = model.OpChangeRoomReply
 	case model.OpSub:
-		if ops, err := strings.SplitInt32s(string(p.Body), ","); err == nil {
+		if ops, err := strings.SplitInt32s(string(msg.Body), ","); err == nil {
 			ch.Watch(ops...)
 		}
-		p.Op = model.OpSubReply
+		msg.Op = model.OpSubReply
 	case model.OpUnsub:
-		if ops, err := strings.SplitInt32s(string(p.Body), ","); err == nil {
+		if ops, err := strings.SplitInt32s(string(msg.Body), ","); err == nil {
 			ch.UnWatch(ops...)
 		}
-		p.Op = model.OpUnsubReply
+		msg.Op = model.OpUnsubReply
 	default:
 		// TODO ack ok&failed
-		if err := s.Receive(ctx, ch.Mid, p); err != nil {
-			log.Errorf("s.Report(%d) op:%d error(%v)", ch.Mid, p.Op, err)
+		if err := s.Receive(ctx, ch.MemberId, msg); err != nil {
+			log.Errorf("s.Report(%d) op:%d error(%v)", ch.MemberId, msg.Op, err)
 		}
-		p.Body = nil
+		msg.Body = nil
 	}
 	return nil
 }

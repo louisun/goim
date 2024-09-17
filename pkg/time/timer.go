@@ -8,257 +8,255 @@ import (
 )
 
 const (
-	timerFormat      = "2006-01-02 15:04:05"
-	infiniteDuration = itime.Duration(1<<63 - 1)
+	timeFormat       = "2006-01-02 15:04:05"     // 时间格式
+	infiniteDuration = itime.Duration(1<<63 - 1) // 无限长的持续时间
 )
 
-// TimerData timer data.
-type TimerData struct {
-	Key    string
-	expire itime.Time
-	fn     func()
-	index  int
-	next   *TimerData
+// TimerTask 每个定时任务抽象出的基本结构（是个链表 Next）
+type TimerTask struct {
+	Key      string     // 唯一标识符
+	Expire   itime.Time // 到期时间
+	Callback func()     // 到期回调函数
+
+	Index int        // 任务在堆中的索引
+	Next  *TimerTask // 下一个空闲的任务节点
 }
 
-// Delay delay duration.
-func (td *TimerData) Delay() itime.Duration {
-	return itime.Until(td.expire)
+// Delay 计算任务的延迟时间 time.Until
+func (task *TimerTask) Delay() itime.Duration {
+	return itime.Until(task.Expire)
 }
 
-// ExpireString expire string.
-func (td *TimerData) ExpireString() string {
-	return td.expire.Format(timerFormat)
+// ExpireString 返回任务到期时间的格式化字符串
+func (task *TimerTask) ExpireString() string {
+	return task.Expire.Format(timeFormat)
 }
 
-// Timer timer.
+// Timer 定时器结构
 type Timer struct {
-	lock   sync.Mutex
-	free   *TimerData
-	timers []*TimerData
-	signal *itime.Timer
-	num    int
+	mutex    sync.Mutex // 互斥锁
+	freeList *TimerTask // 空闲任务链表 TimerTask -> TimerTask -> ... -> nil
+
+	// 使用小顶堆维护的任务列表，这里实现了一个堆排序的算法，每次加入数据都会调整堆
+	// 小顶堆（即最小堆），则最久的任务是在堆顶（优先级最高）
+	taskHeap []*TimerTask
+
+	signalTimer *itime.Timer // 定时器信号
+	capacity    int          // TimerTask 任务容量个数
 }
 
-// NewTimer new a timer.
-// A heap must be initialized before any of the heap operations
-// can be used. Init is idempotent with respect to the heap invariants
-// and may be called whenever the heap invariants may have been invalidated.
-// Its complexity is O(n) where n = h.Len().
-//
-func NewTimer(num int) (t *Timer) {
-	t = new(Timer)
-	t.init(num)
+// NewTimer 创建一个新的定时器
+func NewTimer(capacity int) *Timer {
+	t := &Timer{}
+	t.init(capacity)
 	return t
 }
 
-// Init init the timer.
-func (t *Timer) Init(num int) {
-	t.init(num)
+// Init 初始化定时器
+func (t *Timer) Init(capacity int) {
+	t.init(capacity)
 }
 
-func (t *Timer) init(num int) {
-	t.signal = itime.NewTimer(infiniteDuration)
-	t.timers = make([]*TimerData, 0, num)
-	t.num = num
-	t.grow()
-	go t.start()
+// init 内部初始化函数
+func (t *Timer) init(capacity int) {
+	t.signalTimer = itime.NewTimer(infiniteDuration)
+	t.taskHeap = make([]*TimerTask, 0, capacity)
+	t.capacity = capacity
+	t.expandFreeList() // 初始化空闲任务链表
+	go t.run()         // 开启定时器循环
 }
 
-func (t *Timer) grow() {
-	var (
-		i   int
-		td  *TimerData
-		tds = make([]TimerData, t.num)
-	)
-	t.free = &(tds[0])
-	td = t.free
-	for i = 1; i < t.num; i++ {
-		td.next = &(tds[i])
-		td = td.next
+// expandFreeList 扩展空闲任务链表
+func (t *Timer) expandFreeList() {
+	taskSlice := make([]TimerTask, t.capacity)
+	t.freeList = &taskSlice[0]
+	currentTask := t.freeList
+	for i := 1; i < t.capacity; i++ {
+		currentTask.Next = &taskSlice[i]
+		currentTask = currentTask.Next
 	}
-	td.next = nil
+	currentTask.Next = nil // 链表结束
 }
 
-// get get a free timer data.
-func (t *Timer) get() (td *TimerData) {
-	if td = t.free; td == nil {
-		t.grow()
-		td = t.free
+// getFreeTask 获取一个空闲任务节点
+func (t *Timer) getFreeTask() *TimerTask {
+	if t.freeList == nil {
+		t.expandFreeList() // 如果空闲链表为空，扩展链表
 	}
-	t.free = td.next
-	return
+	task := t.freeList
+	t.freeList = task.Next
+	return task
 }
 
-// put put back a timer data.
-func (t *Timer) put(td *TimerData) {
-	td.fn = nil
-	td.next = t.free
-	t.free = td
+// releaseTask 释放一个任务节点，放回空闲链表
+func (t *Timer) releaseTask(task *TimerTask) {
+	task.Callback = nil
+	task.Next = t.freeList
+	t.freeList = task
 }
 
-// Add add the element x onto the heap. The complexity is
-// O(log(n)) where n = h.Len().
-func (t *Timer) Add(expire itime.Duration, fn func()) (td *TimerData) {
-	t.lock.Lock()
-	td = t.get()
-	td.expire = itime.Now().Add(expire)
-	td.fn = fn
-	t.add(td)
-	t.lock.Unlock()
-	return
+// Add 添加一个新的定时任务
+func (t *Timer) Add(delay itime.Duration, callback func()) *TimerTask {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+
+	task := t.getFreeTask()
+	task.Expire = itime.Now().Add(delay)
+	task.Callback = callback
+	t.push(task) // 将任务加入堆中
+	return task
 }
 
-// Del removes the element at index i from the heap.
-// The complexity is O(log(n)) where n = h.Len().
-func (t *Timer) Del(td *TimerData) {
-	t.lock.Lock()
-	t.del(td)
-	t.put(td)
-	t.lock.Unlock()
+// Remove 删除一个定时任务
+func (t *Timer) Remove(task *TimerTask) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+
+	t.remove(task)
+	t.releaseTask(task)
 }
 
-// Push pushes the element x onto the heap. The complexity is
-// O(log(n)) where n = h.Len().
-func (t *Timer) add(td *TimerData) {
-	var d itime.Duration
-	td.index = len(t.timers)
-	// add to the minheap last node
-	t.timers = append(t.timers, td)
-	t.up(td.index)
-	if td.index == 0 {
-		// if first node, signal start goroutine
-		d = td.Delay()
-		t.signal.Reset(d)
+// push 将任务添加到最小堆中
+func (t *Timer) push(task *TimerTask) {
+	task.Index = len(t.taskHeap)
+	t.taskHeap = append(t.taskHeap, task)
+	t.heapifyUp(task.Index)
+
+	// 如果插入的是堆顶任务，重置定时器
+	if task.Index == 0 {
+		delay := task.Delay()
+		t.signalTimer.Reset(delay)
 		if Debug {
-			log.Infof("timer: add reset delay %d ms", int64(d)/int64(itime.Millisecond))
+			log.Infof("定时器: 添加并重置延迟 %d 毫秒", int64(delay)/int64(itime.Millisecond))
 		}
 	}
+
 	if Debug {
-		log.Infof("timer: push item key: %s, expire: %s, index: %d", td.Key, td.ExpireString(), td.index)
+		log.Infof("定时器: 添加任务 key: %s, 到期时间: %s, 索引: %d", task.Key, task.ExpireString(), task.Index)
 	}
 }
 
-func (t *Timer) del(td *TimerData) {
-	var (
-		i    = td.index
-		last = len(t.timers) - 1
-	)
-	if i < 0 || i > last || t.timers[i] != td {
-		// already remove, usually by expire
+// remove 从堆中删除一个任务，注意：从堆中删除一个元素时，并不仅仅是删除第一个元素，还要保持堆的性质
+func (t *Timer) remove(task *TimerTask) {
+	index := task.Index
+	lastIndex := len(t.taskHeap) - 1
+
+	if index < 0 || index > lastIndex || t.taskHeap[index] != task {
 		if Debug {
-			log.Infof("timer del i: %d, last: %d, %p", i, last, td)
+			log.Infof("定时器删除失败: 索引 %d, 最后索引: %d, 任务地址: %p", index, lastIndex, task)
 		}
 		return
 	}
-	if i != last {
-		t.swap(i, last)
-		t.down(i, last)
-		t.up(i)
+
+	if index != lastIndex {
+		t.swap(index, lastIndex)
+		t.heapifyDown(index, lastIndex)
+		t.heapifyUp(index)
 	}
-	// remove item is the last node
-	t.timers[last].index = -1 // for safety
-	t.timers = t.timers[:last]
+	t.taskHeap = t.taskHeap[:lastIndex] // 移除最后一个元素
+
 	if Debug {
-		log.Infof("timer: remove item key: %s, expire: %s, index: %d", td.Key, td.ExpireString(), td.index)
+		log.Infof("定时器: 删除任务 key: %s, 到期时间: %s, 索引: %d", task.Key, task.ExpireString(), task.Index)
 	}
 }
 
-// Set update timer data.
-func (t *Timer) Set(td *TimerData, expire itime.Duration) {
-	t.lock.Lock()
-	t.del(td)
-	td.expire = itime.Now().Add(expire)
-	t.add(td)
-	t.lock.Unlock()
+// Update 更新 timerTask 的过期时间
+func (t *Timer) Update(td *TimerTask, expire itime.Duration) {
+	t.mutex.Lock()
+	// 先从堆中移除
+	t.remove(td)
+	// 更新新的过期时间
+	td.Expire = itime.Now().Add(expire)
+	// 重新放入堆中
+	t.push(td)
+	t.mutex.Unlock()
 }
 
-// start start the timer.
-func (t *Timer) start() {
+// run 启动定时器循环
+func (t *Timer) run() {
 	for {
-		t.expire()
-		<-t.signal.C
+		t.processExpiredTasks()
+		<-t.signalTimer.C
 	}
 }
 
-// expire removes the minimum element (according to Less) from the heap.
-// The complexity is O(log(n)) where n = max.
-// It is equivalent to Del(0).
-func (t *Timer) expire() {
-	var (
-		fn func()
-		td *TimerData
-		d  itime.Duration
-	)
-	t.lock.Lock()
+// processExpiredTasks 处理到期的任务
+func (t *Timer) processExpiredTasks() {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+
 	for {
-		if len(t.timers) == 0 {
-			d = infiniteDuration
+		if len(t.taskHeap) == 0 {
+			t.signalTimer.Reset(infiniteDuration)
 			if Debug {
-				log.Info("timer: no other instance")
+				log.Info("定时器: 没有任务")
 			}
 			break
 		}
-		td = t.timers[0]
-		if d = td.Delay(); d > 0 {
+
+		task := t.taskHeap[0]
+		delay := task.Delay()
+
+		if delay > 0 {
+			t.signalTimer.Reset(delay)
 			break
 		}
-		fn = td.fn
-		// let caller put back
-		t.del(td)
-		t.lock.Unlock()
-		if fn == nil {
-			log.Warning("expire timer no fn")
+
+		callback := task.Callback
+
+		// 从 taskHeap 中移除 task，并且重新调整堆
+		t.remove(task)
+
+		if callback == nil {
+			log.Warning("到期任务没有回调函数")
 		} else {
 			if Debug {
-				log.Infof("timer key: %s, expire: %s, index: %d expired, call fn", td.Key, td.ExpireString(), td.index)
+				log.Infof("定时器任务 key: %s, 到期时间: %s, 索引: %d 已到期，执行回调", task.Key, task.ExpireString(), task.Index)
 			}
-			fn()
+			go callback()
 		}
-		t.lock.Lock()
 	}
-	t.signal.Reset(d)
-	if Debug {
-		log.Infof("timer: expier reset delay %d ms", int64(d)/int64(itime.Millisecond))
-	}
-	t.lock.Unlock()
 }
 
-func (t *Timer) up(j int) {
+// heapifyUp 上浮调整堆
+func (t *Timer) heapifyUp(index int) {
 	for {
-		i := (j - 1) / 2 // parent
-		if i <= j || !t.less(j, i) {
+		parent := (index - 1) / 2
+		if index <= 0 || !t.less(index, parent) {
 			break
 		}
-		t.swap(i, j)
-		j = i
+		t.swap(index, parent)
+		index = parent
 	}
 }
 
-func (t *Timer) down(i, n int) {
+// heapifyDown 下沉调整堆
+func (t *Timer) heapifyDown(index, n int) {
 	for {
-		j1 := 2*i + 1
-		if j1 >= n || j1 < 0 { // j1 < 0 after int overflow
+		leftChild := 2*index + 1
+		if leftChild >= n || leftChild < 0 {
 			break
 		}
-		j := j1 // left child
-		if j2 := j1 + 1; j2 < n && !t.less(j1, j2) {
-			j = j2 // = 2*i + 2  // right child
+		smallest := leftChild
+		if rightChild := leftChild + 1; rightChild < n && !t.less(leftChild, rightChild) {
+			smallest = rightChild
 		}
-		if !t.less(j, i) {
+		if !t.less(smallest, index) {
 			break
 		}
-		t.swap(i, j)
-		i = j
+		t.swap(index, smallest)
+		index = smallest
 	}
 }
 
+// less 比较两个任务的到期时间，决定堆的顺序
 func (t *Timer) less(i, j int) bool {
-	return t.timers[i].expire.Before(t.timers[j].expire)
+	return t.taskHeap[i].Expire.Before(t.taskHeap[j].Expire)
 }
 
+// swap 交换两个任务在堆中的位置
 func (t *Timer) swap(i, j int) {
-	t.timers[i], t.timers[j] = t.timers[j], t.timers[i]
-	t.timers[i].index = i
-	t.timers[j].index = j
+	t.taskHeap[i], t.taskHeap[j] = t.taskHeap[j], t.taskHeap[i]
+	t.taskHeap[i].Index = i
+	t.taskHeap[j].Index = j
 }

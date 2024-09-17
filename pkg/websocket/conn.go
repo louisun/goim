@@ -57,14 +57,14 @@ var (
 
 // Conn represents a WebSocket connection.
 type Conn struct {
-	rwc io.ReadWriteCloser
-	r   *bufio.Reader
-	w   *bufio.Writer
+	conn io.ReadWriteCloser
+	r    *bufio.BufferedReader
+	w    *bufio.BufferedWriter
 }
 
 // new connection
-func newConn(rwc io.ReadWriteCloser, r *bufio.Reader, w *bufio.Writer) *Conn {
-	return &Conn{rwc: rwc, r: r, w: w}
+func newConn(rwc io.ReadWriteCloser, r *bufio.BufferedReader, w *bufio.BufferedWriter) *Conn {
+	return &Conn{conn: rwc, r: r, w: w}
 }
 
 // WriteMessage write a message by type.
@@ -244,7 +244,7 @@ func (c *Conn) readFrame() (fin bool, op int, payload []byte, err error) {
 
 // Close close the connection.
 func (c *Conn) Close() error {
-	return c.rwc.Close()
+	return c.conn.Close()
 }
 
 func maskBytes(key []byte, pos int, b []byte) int {

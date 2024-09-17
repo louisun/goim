@@ -37,6 +37,6 @@ func TestConnect(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, online)
 	// message
-	err = lg.Receive(c, mid, &grpc.Proto{})
+	err = lg.Receive(c, mid, &grpc.ProtoMsg{})
 	assert.Nil(t, err)
 }
